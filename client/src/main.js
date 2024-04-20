@@ -5,7 +5,6 @@ import { GameConfig } from "../../shared/gameConfig";
 import { math } from "../../shared/utils/math";
 import * as net from "../../shared/net";
 import { Account } from "./account";
-import { api } from "./api";
 import { Ambiance } from "./ambiance";
 import { AudioManager } from "./audioManager";
 import { device } from "./device";
@@ -25,6 +24,7 @@ import { ProfileUi } from "./ui/profileUi";
 import { ResourceManager } from "./resources";
 import { SiteInfo } from "./siteInfo";
 import { TeamMenu } from "./ui/teamMenu";
+import { OfflineServer } from "../../server/src/offlineServer";
 
 class Application {
     constructor() {
@@ -108,6 +108,7 @@ class Application {
             });
         };
         this.loadBrowserDeps(onLoadComplete);
+        this.server = new OfflineServer(this.game);
     }
 
     loadBrowserDeps(onLoadCompleteCb) {
@@ -339,6 +340,7 @@ class Application {
                 this.inputBindUi,
                 this.ambience,
                 this.resourceManager,
+                this.server,
                 onJoin,
                 onQuit
             );
@@ -659,74 +661,11 @@ class Application {
     }
 
     findGame(matchArgs, _cb) {
-        (function findGameImpl(iter, maxAttempts) {
-            if (iter >= maxAttempts) {
-                _cb("full");
-                return;
-            }
-            const retry = function() {
-                setTimeout(() => {
-                    findGameImpl(iter + 1, maxAttempts);
-                }, 500);
-            };
-            $.ajax({
-                type: "POST",
-                url: api.resolveUrl("/api/find_game"),
-                data: JSON.stringify(matchArgs),
-                contentType: "application/json; charset=utf-8",
-                timeout: 10 * 1000,
-                success: function(data) {
-                    if (data?.err && data.err != "full") {
-                        _cb(data.err);
-                        return;
-                    }
-                    const matchData = data?.res ? data.res[0] : null;
-                    if (matchData?.hosts && matchData.addrs) {
-                        _cb(null, matchData);
-                    } else {
-                        retry();
-                    }
-                },
-                error: function(e) {
-                    retry();
-                }
-            });
-        })(0, 2);
+        _cb(null, this.server.findGame("local"));
     }
 
     joinGame(matchData) {
-        if (!this.game) {
-            setTimeout(() => {
-                this.joinGame(matchData);
-            }, 250);
-            return;
-        }
-        const hosts = matchData.hosts || [];
-        const urls = [];
-        for (let i = 0; i < hosts.length; i++) {
-            urls.push(
-                `ws${matchData.useHttps ? "s" : ""}://${hosts[i]}/play?gameId=${matchData.gameId}`
-            );
-        }
-        const joinGameImpl = (urls, matchData) => {
-            const url = urls.shift();
-            if (!url) {
-                this.onJoinGameError("join_game_failed");
-                return;
-            }
-            console.log("Joining", url, matchData.zone);
-            const onFailure = function() {
-                joinGameImpl(urls, matchData);
-            };
-            this.game.tryJoinGame(
-                url,
-                matchData.data,
-                this.account.loadoutPriv,
-                this.account.questPriv,
-                onFailure
-            );
-        };
-        joinGameImpl(urls, matchData);
+        this.game.tryJoinGame();
     }
 
     onJoinGameError(err) {

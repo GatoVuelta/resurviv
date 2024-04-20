@@ -49,6 +49,7 @@ import { Touch } from "./ui/touch";
 import { UiManager } from "./ui/ui";
 import { UiManager2 } from "./ui/ui2";
 import { ObjectType } from "../../shared/utils/objectSerializeFns";
+import { OfflineSocket } from "../../server/src/offlineServer";
 
 const Input = GameConfig.Input;
 
@@ -63,8 +64,9 @@ export class Game {
      * @param {import("./inputBinds").InputBindUi} inputBindUi
      * @param {import("./ambiance").Ambiance} ambience
      * @param {import("./resources").ResourceManager} resourceManager
+     * @param {import("../../server/src/offlineServer").OfflineServer} server
     */
-    constructor(pixi, audioManager, localization, config, input, inputBinds, inputBindUi, ambience, resourceManager, onJoin, onQuit) {
+    constructor(pixi, audioManager, localization, config, input, inputBinds, inputBindUi, ambience, resourceManager, server, onJoin, onQuit) {
         this.initialized = false;
         this.teamMode = 0;
         // Callbacks
@@ -80,82 +82,29 @@ export class Game {
         this.inputBinds = inputBinds;
         this.inputBindUi = inputBindUi;
         this.resourceManager = resourceManager;
+        this.server = server;
         this.victoryMusic = null;
         this.ws = null;
         this.connecting = false;
         this.connected = false;
     }
 
-    tryJoinGame(url, matchPriv, loadoutPriv, questPriv, onConnectFail) {
-        if (
-            !this.connecting &&
-            !this.connected &&
-            !this.initialized
-        ) {
-            if (this.ws) {
-                this.ws.onerror = function() { };
-                this.ws.onopen = function() { };
-                this.ws.onmessage = function() { };
-                this.ws.onclose = function() { };
-                this.ws.close();
-                this.ws = null;
-            }
-            this.connecting = true;
-            this.connected = false;
-            try {
-                this.ws = new WebSocket(url);
-                this.ws.binaryType = "arraybuffer";
-                this.ws.onerror = (_err) => {
-                    this.ws?.close();
-                };
-                this.ws.onopen = () => {
-                    this.connecting = false;
-                    this.connected = true;
-                    const name = this.config.get("playerName");
-                    const joinMessage = new JoinMsg();
-                    joinMessage.protocol = GameConfig.protocolVersion;
-                    joinMessage.matchPriv = matchPriv;
-                    joinMessage.loadoutPriv = loadoutPriv;
-                    joinMessage.questPriv = questPriv;
-                    joinMessage.name = name;
-                    joinMessage.useTouch = device.touch;
-                    joinMessage.isMobile = device.mobile || window.mobile;
-                    joinMessage.bot = false;
-                    joinMessage.loadout = this.config.get("loadout");
+    tryJoinGame() {
+        this.ws = new OfflineSocket(this, { gameID: 0 });
+        this.server.onOpen(this.ws);
 
-                    this.sendMessage(net.MsgType.Join, joinMessage, 8192);
-                };
-                this.ws.onmessage = (e) => {
-                    const msgStream = new net.MsgStream(e.data);
-                    while (true) {
-                        const type = msgStream.deserializeMsgType();
-                        if (type == net.MsgType.None) {
-                            break;
-                        }
-                        this.onMsg(type, msgStream.getStream());
-                    }
-                };
-                this.ws.onclose = () => {
-                    const displayingStats = this.uiManager?.displayingStats;
-                    const connecting = this.connecting;
-                    const connected = this.connected;
-                    this.connecting = false;
-                    this.connected = false;
-                    if (connecting) {
-                        onConnectFail();
-                    } else if (connected && !this.gameOver && !displayingStats) {
-                        const errMsg =
-                            this.disconnectMsg || "index-host-closed";
-                        this.onQuit(errMsg);
-                    }
-                };
-            } catch (err) {
-                console.error(err);
-                this.connecting = false;
-                this.connected = false;
-                onConnectFail();
-            }
-        }
+        this.connecting = false;
+        this.connected = true;
+        const name = this.config.get("playerName");
+        const joinMessage = new JoinMsg();
+        joinMessage.protocol = GameConfig.protocolVersion;
+        joinMessage.name = name;
+        joinMessage.useTouch = device.touch;
+        joinMessage.isMobile = device.mobile || window.mobile;
+        joinMessage.bot = false;
+        joinMessage.loadout = this.config.get("loadout");
+
+        this.sendMessage(net.MsgType.Join, joinMessage, 8192);
     }
 
     init() {
@@ -1478,15 +1427,6 @@ export class Game {
     }
 
     sendMessageImpl(msgStream) {
-        // Separate function call so sendMessage can be optimized;
-        // v8 won't optimize functions containing a try/catch
-        if (this.ws && this.ws.readyState == this.ws.OPEN) {
-            try {
-                this.ws.send(msgStream.getBuffer());
-            } catch (e) {
-                console.error("sendMessageException", e);
-                this.ws.close();
-            }
-        }
+        this.server.onMessage(this.ws, msgStream.getBuffer());
     }
 }
