@@ -3,6 +3,7 @@ import { Config } from "../server/src/config";
 
 export default defineConfig(() => {
     return {
+        base: "",
         plugins: [
             splitVendorChunkPlugin()
         ],
